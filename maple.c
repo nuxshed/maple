@@ -7,7 +7,7 @@
 //  '~|/~~|~~\|~'
 //        |
 //     maple.c
-//  nuxsh - v0.2
+//  nuxsh - v0.3
 
 #include <dirent.h>
 #include <ncurses.h>
@@ -16,9 +16,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #define MAX_ITEMS 1024
 #define MAX_PATH_LEN 4096
+#define MAX_SEARCH_LEN 256
 
 typedef struct {
   char name[MAX_PATH_LEN];
@@ -29,11 +31,16 @@ typedef struct {
 FileItem items[MAX_ITEMS];
 int num_items = 0;
 int current_selection = 0;
+int show_hidden = 1;
+char search_term[MAX_SEARCH_LEN] = "";
 
 void draw_interface(char *current_dir);
 void list_files(char *current_dir);
 void navigate(char *current_dir);
 void delete_marked_files(char *current_dir);
+void toggle_hidden_files(char *current_dir);
+void search_files(char *current_dir);
+int file_matches_search(const char *filename);
 
 int main() {
   initscr();
@@ -42,6 +49,7 @@ int main() {
   curs_set(FALSE);
   start_color();
   init_pair(1, COLOR_RED, COLOR_BLACK);
+  init_pair(2, COLOR_GREEN, COLOR_BLACK);
 
   char current_dir[MAX_PATH_LEN];
   getcwd(current_dir, sizeof(current_dir));
@@ -67,7 +75,11 @@ void list_files(char *current_dir) {
 
   num_items = 0;
   while ((entry = readdir(dp)) && num_items < MAX_ITEMS) {
-    if (strcmp(entry->d_name, ".") == 0) {
+    if (!show_hidden && entry->d_name[0] == '.') {
+      continue;
+    }
+
+    if (!file_matches_search(entry->d_name)) {
       continue;
     }
 
@@ -90,7 +102,9 @@ void draw_interface(char *current_dir) {
   clear();
 
   mvprintw(0, 0, "Current Directory: %s", current_dir);
+  mvprintw(1, 0, "Search: %s", search_term);
 
+  int start_y = 3;
   for (int i = 0; i < num_items; i++) {
     if (i == current_selection) {
       attron(A_REVERSE);
@@ -100,9 +114,11 @@ void draw_interface(char *current_dir) {
     }
 
     if (items[i].is_dir) {
-      mvprintw(i + 2, 2, "├── %s/", items[i].name);
+      attron(COLOR_PAIR(2));
+      mvprintw(i + start_y, 2, "├── %s/", items[i].name);
+      attroff(COLOR_PAIR(2));
     } else {
-      mvprintw(i + 2, 2, "├── %s", items[i].name);
+      mvprintw(i + start_y, 2, "├── %s", items[i].name);
     }
 
     if (items[i].marked_for_deletion) {
@@ -150,7 +166,6 @@ void navigate(char *current_dir) {
     break;
   case KEY_LEFT:
   case 'h':
-  case KEY_BACKSPACE:
   {
     char *last_slash = strrchr(current_dir, '/');
     if (last_slash != NULL && last_slash != current_dir) {
@@ -163,6 +178,12 @@ void navigate(char *current_dir) {
     break;
   case 'D':
     delete_marked_files(current_dir);
+    break;
+  case 'H':
+    toggle_hidden_files(current_dir);
+    break;
+  case '/':
+    search_files(current_dir);
     break;
   case 'q':
     endwin();
@@ -185,4 +206,43 @@ void delete_marked_files(char *current_dir) {
     }
   }
   list_files(current_dir);
+}
+
+void toggle_hidden_files(char *current_dir) {
+  show_hidden = !show_hidden;
+  current_selection = 0;
+  list_files(current_dir);
+}
+
+void search_files(char *current_dir) {
+  echo();
+  curs_set(TRUE);
+  mvprintw(1, 8, "                                        ");
+  mvprintw(1, 8, "");
+  getnstr(search_term, MAX_SEARCH_LEN);
+  noecho();
+  curs_set(FALSE);
+  current_selection = 0;
+  list_files(current_dir);
+}
+
+int file_matches_search(const char *filename) {
+  if (strlen(search_term) == 0) {
+    return 1;
+  }
+  
+  char lower_filename[MAX_PATH_LEN];
+  char lower_search[MAX_SEARCH_LEN];
+  
+  for (int i = 0; filename[i]; i++) {
+    lower_filename[i] = tolower(filename[i]);
+  }
+  lower_filename[strlen(filename)] = '\0';
+  
+  for (int i = 0; search_term[i]; i++) {
+    lower_search[i] = tolower(search_term[i]);
+  }
+  lower_search[strlen(search_term)] = '\0';
+  
+  return strstr(lower_filename, lower_search) != NULL;
 }

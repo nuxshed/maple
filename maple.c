@@ -7,7 +7,7 @@
 //  '~|/~~|~~\|~'
 //        |
 //     maple.c
-//  nuxsh - v0.3
+//  nuxsh - v0.4
 
 #include <dirent.h>
 #include <ncurses.h>
@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <pwd.h>
 
 #define MAX_ITEMS 1024
 #define MAX_PATH_LEN 4096
@@ -25,22 +26,25 @@
 typedef struct {
   char name[MAX_PATH_LEN];
   int is_dir;
-  int marked_for_deletion;
 } FileItem;
 
 FileItem items[MAX_ITEMS];
 int num_items = 0;
 int current_selection = 0;
-int show_hidden = 1;
+int show_hidden = 0;
 char search_term[MAX_SEARCH_LEN] = "";
+int scroll_offset = 0;
 
 void draw_interface(char *current_dir);
 void list_files(char *current_dir);
 void navigate(char *current_dir);
-void delete_marked_files(char *current_dir);
 void toggle_hidden_files(char *current_dir);
 void search_files(char *current_dir);
 int file_matches_search(const char *filename);
+void delete_file(char *current_dir);
+void open_file(char *current_dir);
+void go_to_parent_dir(char *current_dir);
+void go_to_home_dir(char *current_dir);
 
 int main() {
   initscr();
@@ -50,6 +54,7 @@ int main() {
   start_color();
   init_pair(1, COLOR_RED, COLOR_BLACK);
   init_pair(2, COLOR_GREEN, COLOR_BLACK);
+  init_pair(3, COLOR_YELLOW, COLOR_BLACK);
 
   char current_dir[MAX_PATH_LEN];
   getcwd(current_dir, sizeof(current_dir));
@@ -79,6 +84,10 @@ void list_files(char *current_dir) {
       continue;
     }
 
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+
     if (!file_matches_search(entry->d_name)) {
       continue;
     }
@@ -90,7 +99,6 @@ void list_files(char *current_dir) {
 
     strncpy(items[num_items].name, entry->d_name, MAX_PATH_LEN - 1);
     items[num_items].is_dir = S_ISDIR(file_stat.st_mode);
-    items[num_items].marked_for_deletion = 0;
 
     num_items++;
   }
@@ -101,29 +109,36 @@ void list_files(char *current_dir) {
 void draw_interface(char *current_dir) {
   clear();
 
+  int max_y, max_x;
+  getmaxyx(stdscr, max_y, max_x);
+
   mvprintw(0, 0, "Current Directory: %s", current_dir);
   mvprintw(1, 0, "Search: %s", search_term);
 
   int start_y = 3;
-  for (int i = 0; i < num_items; i++) {
+  int end_y = max_y - 2;
+  int displayable_items = end_y - start_y;
+
+  if (current_selection < scroll_offset) {
+    scroll_offset = current_selection;
+  } else if (current_selection >= scroll_offset + displayable_items) {
+    scroll_offset = current_selection - displayable_items + 1;
+  }
+
+  for (int i = scroll_offset; i < num_items && i < scroll_offset + displayable_items; i++) {
+    int y = i - scroll_offset + start_y;
     if (i == current_selection) {
       attron(A_REVERSE);
-    }
-    if (items[i].marked_for_deletion) {
-      attron(COLOR_PAIR(1));
     }
 
     if (items[i].is_dir) {
       attron(COLOR_PAIR(2));
-      mvprintw(i + start_y, 2, "├── %s/", items[i].name);
+      mvprintw(y, 2, "├── %s/", items[i].name);
       attroff(COLOR_PAIR(2));
     } else {
-      mvprintw(i + start_y, 2, "├── %s", items[i].name);
+      mvprintw(y, 2, "├── %s", items[i].name);
     }
 
-    if (items[i].marked_for_deletion) {
-      attroff(COLOR_PAIR(1));
-    }
     if (i == current_selection) {
       attroff(A_REVERSE);
     }
@@ -152,32 +167,20 @@ void navigate(char *current_dir) {
   case 'l':
   case 10: // Enter key
     if (items[current_selection].is_dir) {
-      if (strcmp(items[current_selection].name, "..") == 0) {
-        char *last_slash = strrchr(current_dir, '/');
-        if (last_slash != NULL && last_slash != current_dir) {
-          *last_slash = '\0';
-        }
-      } else {
-        strcat(current_dir, "/");
-        strcat(current_dir, items[current_selection].name);
-      }
+      strcat(current_dir, "/");
+      strcat(current_dir, items[current_selection].name);
       current_selection = 0;
+      scroll_offset = 0;
+    } else {
+      open_file(current_dir);
     }
     break;
   case KEY_LEFT:
   case 'h':
-  {
-    char *last_slash = strrchr(current_dir, '/');
-    if (last_slash != NULL && last_slash != current_dir) {
-      *last_slash = '\0';
-    }
-    current_selection = 0;
-  } break;
-  case 'd':
-    items[current_selection].marked_for_deletion = !items[current_selection].marked_for_deletion;
+    go_to_parent_dir(current_dir);
     break;
-  case 'D':
-    delete_marked_files(current_dir);
+  case 'd':
+    delete_file(current_dir);
     break;
   case 'H':
     toggle_hidden_files(current_dir);
@@ -185,32 +188,37 @@ void navigate(char *current_dir) {
   case '/':
     search_files(current_dir);
     break;
+  case '~':
+    go_to_home_dir(current_dir);
+    break;
   case 'q':
+  case 27:
     endwin();
     exit(0);
     break;
   }
 }
 
-void delete_marked_files(char *current_dir) {
-  for (int i = 0; i < num_items; i++) {
-    if (items[i].marked_for_deletion) {
-      char full_path[MAX_PATH_LEN];
-      snprintf(full_path, sizeof(full_path), "%s/%s", current_dir, items[i].name);
-      
-      if (items[i].is_dir) {
-        rmdir(full_path);
-      } else {
-        remove(full_path);
-      }
-    }
+void delete_file(char *current_dir) {
+  char full_path[MAX_PATH_LEN];
+  snprintf(full_path, sizeof(full_path), "%s/%s", current_dir, items[current_selection].name);
+  
+  if (items[current_selection].is_dir) {
+    rmdir(full_path);
+  } else {
+    remove(full_path);
   }
+  
   list_files(current_dir);
+  if (current_selection >= num_items && num_items > 0) {
+    current_selection = num_items - 1;
+  }
 }
 
 void toggle_hidden_files(char *current_dir) {
   show_hidden = !show_hidden;
   current_selection = 0;
+  scroll_offset = 0;
   list_files(current_dir);
 }
 
@@ -223,6 +231,7 @@ void search_files(char *current_dir) {
   noecho();
   curs_set(FALSE);
   current_selection = 0;
+  scroll_offset = 0;
   list_files(current_dir);
 }
 
@@ -245,4 +254,34 @@ int file_matches_search(const char *filename) {
   lower_search[strlen(search_term)] = '\0';
   
   return strstr(lower_filename, lower_search) != NULL;
+}
+
+void open_file(char *current_dir) {
+  char full_path[MAX_PATH_LEN];
+  snprintf(full_path, sizeof(full_path), "%s/%s", current_dir, items[current_selection].name);
+  
+  char command[MAX_PATH_LEN + 10];
+  snprintf(command, sizeof(command), "xdg-open '%s'", full_path);
+  
+  endwin();
+  system(command);
+  refresh();
+}
+
+void go_to_parent_dir(char *current_dir) {
+  char *last_slash = strrchr(current_dir, '/');
+  if (last_slash != NULL && last_slash != current_dir) {
+    *last_slash = '\0';
+  }
+  current_selection = 0;
+  scroll_offset = 0;
+}
+
+void go_to_home_dir(char *current_dir) {
+  struct passwd *pw = getpwuid(getuid());
+  const char *homedir = pw->pw_dir;
+  strncpy(current_dir, homedir, MAX_PATH_LEN);
+  current_dir[MAX_PATH_LEN - 1] = '\0';
+  current_selection = 0;
+  scroll_offset = 0;
 }

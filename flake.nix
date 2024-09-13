@@ -1,39 +1,49 @@
 {
   description = "nix flake for maple";
-  # based on `c-cpp` flake from https://github.com/the-nix-way/dev-templates 
 
   inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1.*.tar.gz";
 
   outputs = { self, nixpkgs }:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+
       forEachSupportedSystem = f: nixpkgs.lib.genAttrs supportedSystems (system: f {
         pkgs = import nixpkgs { inherit system; };
       });
-    in
-    {
+    in {
       devShells = forEachSupportedSystem ({ pkgs }: {
-        default = pkgs.mkShell.override
-          {
-            # Override stdenv in order to change compiler:
-            # stdenv = pkgs.clangStdenv;
-          }
-          {
-            packages = with pkgs; [
-              clang-tools
-              cmake
-              codespell
-              conan
-              cppcheck
-              doxygen
-              gtest
-              lcov
-              vcpkg
-              vcpkg-tool
-              ncurses5
-            ] ++ (if system == "aarch64-darwin" then [ ] else [ gdb ]);
+        default = pkgs.mkShell {
+          packages = with pkgs; [
+            clang-tools
+            ncurses5
+          ] ++ (if pkgs.stdenv.isDarwin then [] else [ pkgs.gdb ]);
+        };
+      });
+
+      packages = forEachSupportedSystem ({ pkgs }: {
+        default = pkgs.stdenv.mkDerivation {
+          pname = "maple";
+          version = "0.1.0";
+
+          src = self;
+          buildInputs = [ pkgs.ncurses ];
+
+          buildPhase = ''
+            ${pkgs.clang}/bin/clang -o maple maple.c -lncurses
+          '';
+
+          installPhase = ''
+            mkdir -p $out/bin
+            cp maple $out/bin/
+          '';
+
+          meta = with pkgs.lib; {
+            description = "Maple - a simple terminal-based file explorer";
+            license = licenses.mit;
+            platforms = platforms.linux ++ platforms.darwin;
+            maintainers = [ "nuxsh" ];
           };
+        };
       });
     };
 }
-

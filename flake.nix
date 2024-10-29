@@ -38,7 +38,7 @@
           '';
 
           meta = with pkgs.lib; {
-            description = "Maple - a simple terminal-based file explorer";
+            description = "Minimal Agile Path-based List Explorer";
             license = licenses.mit;
             platforms = platforms.linux ++ platforms.darwin;
             maintainers = [ "nuxsh" ];

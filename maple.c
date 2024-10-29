@@ -7,7 +7,7 @@
 //  '~|/~~|~~\|~'
 //        |
 //     maple.c
-//  nuxsh - v0.4
+//  nuxsh - v0.5
 
 #include <dirent.h>
 #include <ncurses.h>
@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <pwd.h>
+#include <time.h>
 
 #define MAX_ITEMS 1024
 #define MAX_PATH_LEN 4096
@@ -26,6 +27,8 @@
 typedef struct {
   char name[MAX_PATH_LEN];
   int is_dir;
+  off_t size;
+  time_t mtime;
 } FileItem;
 
 FileItem items[MAX_ITEMS];
@@ -95,10 +98,15 @@ void list_files(char *current_dir) {
     char full_path[MAX_PATH_LEN];
     snprintf(full_path, sizeof(full_path), "%s/%s", current_dir, entry->d_name);
 
-    stat(full_path, &file_stat);
+    if (stat(full_path, &file_stat) == -1) {
+      continue;
+    }
 
     strncpy(items[num_items].name, entry->d_name, MAX_PATH_LEN - 1);
+    items[num_items].name[MAX_PATH_LEN - 1] = '\0';
     items[num_items].is_dir = S_ISDIR(file_stat.st_mode);
+    items[num_items].size = file_stat.st_size;
+    items[num_items].mtime = file_stat.st_mtime;
 
     num_items++;
   }
@@ -112,8 +120,8 @@ void draw_interface(char *current_dir) {
   int max_y, max_x;
   getmaxyx(stdscr, max_y, max_x);
 
-  mvprintw(0, 0, "Current Directory: %s", current_dir);
-  mvprintw(1, 0, "Search: %s", search_term);
+  mvprintw(0, 0, "%s", current_dir);
+  mvprintw(1, 0, "search: %s", search_term);
 
   int start_y = 3;
   int end_y = max_y - 2;
@@ -125,18 +133,54 @@ void draw_interface(char *current_dir) {
     scroll_offset = current_selection - displayable_items + 1;
   }
 
+  int size_width = 10;
+  int time_width = 12;
+  int name_width = max_x - size_width - time_width - 7;
+
   for (int i = scroll_offset; i < num_items && i < scroll_offset + displayable_items; i++) {
     int y = i - scroll_offset + start_y;
+    char size_str[32];
+    if (items[i].is_dir) {
+      snprintf(size_str, sizeof(size_str), "<DIR>");
+    } else if (items[i].size < 1024) {
+      snprintf(size_str, sizeof(size_str), "%ldB", items[i].size);
+    } else if (items[i].size < 1024 * 1024) {
+      snprintf(size_str, sizeof(size_str), "%.1fK", items[i].size / 1024.0);
+    } else if (items[i].size < 1024 * 1024 * 1024) {
+      snprintf(size_str, sizeof(size_str), "%.1fM", items[i].size / 1024.0 / 1024.0);
+    } else {
+      snprintf(size_str, sizeof(size_str), "%.1fG", items[i].size / 1024.0 / 1024.0 / 1024.0);
+    }
+
+    char time_str[32];
+    strftime(time_str, sizeof(time_str), "%b %d %H:%M ", localtime(&items[i].mtime));
+
     if (i == current_selection) {
       attron(A_REVERSE);
     }
 
     if (items[i].is_dir) {
       attron(COLOR_PAIR(2));
-      mvprintw(y, 2, "├── %s/", items[i].name);
+    }
+    
+    char display_name[MAX_PATH_LEN];
+    strncpy(display_name, items[i].name, sizeof(display_name) - 1);
+    display_name[sizeof(display_name) - 1] = '\0';
+    
+    if (strlen(display_name) > name_width) {
+      display_name[name_width - 3] = '.';
+      display_name[name_width - 2] = '.';
+      display_name[name_width - 1] = '.';
+      display_name[name_width] = '\0';
+    }
+    
+    mvprintw(y, 2, " %-*s %*s  %*s", 
+             name_width, display_name,
+             size_width, size_str,
+             time_width, time_str);
+    
+    if (items[i].is_dir) {
       attroff(COLOR_PAIR(2));
-    } else {
-      mvprintw(y, 2, "├── %s", items[i].name);
     }
 
     if (i == current_selection) {
@@ -165,13 +209,13 @@ void navigate(char *current_dir) {
     break;
   case KEY_RIGHT:
   case 'l':
-  case 10: // Enter key
-    if (items[current_selection].is_dir) {
+  case 10:
+    if (num_items > 0 && items[current_selection].is_dir) {
       strcat(current_dir, "/");
       strcat(current_dir, items[current_selection].name);
       current_selection = 0;
       scroll_offset = 0;
-    } else {
+    } else if (num_items > 0) {
       open_file(current_dir);
     }
     break;
@@ -197,6 +241,8 @@ void navigate(char *current_dir) {
     exit(0);
     break;
   }
+
+  draw_interface(current_dir);
 }
 
 void delete_file(char *current_dir) {

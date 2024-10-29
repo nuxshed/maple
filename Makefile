@@ -11,5 +11,8 @@ $(TARGET): maple.c
 
 clean:
 	rm -f $(TARGET)
+run:
+	@$(CC) $(CFLAGS) -o $(TARGET) maple.c $(LIBS)
+	./maple
 
 .PHONY: all clean

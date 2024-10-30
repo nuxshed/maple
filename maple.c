@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <pwd.h>
 #include <time.h>
+#include <errno.h>
 
 #define MAX_ITEMS 1024
 #define MAX_PATH_LEN 4096
@@ -60,7 +61,11 @@ int main() {
   init_pair(3, COLOR_YELLOW, COLOR_BLACK);
 
   char current_dir[MAX_PATH_LEN];
-  getcwd(current_dir, sizeof(current_dir));
+  if (getcwd(current_dir, sizeof(current_dir)) == NULL) {
+    endwin();
+    fprintf(stderr, "Error getting current directory\n");
+    return 1;
+  }
 
   while (1) {
     list_files(current_dir);
@@ -78,10 +83,13 @@ void list_files(char *current_dir) {
   struct stat file_stat;
 
   if (dp == NULL) {
+    mvprintw(0, 0, "Error: Cannot open directory %s", current_dir);
+    refresh();
     return;
   }
 
   num_items = 0;
+  errno = 0;
   while ((entry = readdir(dp)) && num_items < MAX_ITEMS) {
     if (!show_hidden && entry->d_name[0] == '.') {
       continue;
@@ -102,6 +110,12 @@ void list_files(char *current_dir) {
       continue;
     }
 
+    if (num_items >= MAX_ITEMS) {
+      mvprintw(0, 0, "Warning: Directory has too many items, some are not shown");
+      refresh();
+      break;
+    }
+
     strncpy(items[num_items].name, entry->d_name, MAX_PATH_LEN - 1);
     items[num_items].name[MAX_PATH_LEN - 1] = '\0';
     items[num_items].is_dir = S_ISDIR(file_stat.st_mode);
@@ -109,6 +123,11 @@ void list_files(char *current_dir) {
     items[num_items].mtime = file_stat.st_mtime;
 
     num_items++;
+  }
+
+  if (errno != 0) {
+    mvprintw(0, 0, "Error reading directory: %s", strerror(errno));
+    refresh();
   }
 
   closedir(dp);
@@ -167,7 +186,7 @@ void draw_interface(char *current_dir) {
     strncpy(display_name, items[i].name, sizeof(display_name) - 1);
     display_name[sizeof(display_name) - 1] = '\0';
     
-    if (strlen(display_name) > name_width) {
+    if ((int)strlen(display_name) > name_width) {
       display_name[name_width - 3] = '.';
       display_name[name_width - 2] = '.';
       display_name[name_width - 1] = '.';
@@ -211,8 +230,10 @@ void navigate(char *current_dir) {
   case 'l':
   case 10:
     if (num_items > 0 && items[current_selection].is_dir) {
-      strcat(current_dir, "/");
-      strcat(current_dir, items[current_selection].name);
+      char new_path[MAX_PATH_LEN];
+      snprintf(new_path, sizeof(new_path), "%s/%s", current_dir, items[current_selection].name);
+      strncpy(current_dir, new_path, MAX_PATH_LEN - 1);
+      current_dir[MAX_PATH_LEN - 1] = '\0';
       current_selection = 0;
       scroll_offset = 0;
     } else if (num_items > 0) {
@@ -272,8 +293,14 @@ void search_files(char *current_dir) {
   echo();
   curs_set(TRUE);
   mvprintw(1, 8, "                                        ");
-  mvprintw(1, 8, "");
-  getnstr(search_term, MAX_SEARCH_LEN);
+  move(1, 8);
+  
+  char temp_search[MAX_SEARCH_LEN];
+  if (getnstr(temp_search, MAX_SEARCH_LEN - 1) == OK) {
+    strncpy(search_term, temp_search, MAX_SEARCH_LEN - 1);
+    search_term[MAX_SEARCH_LEN - 1] = '\0';
+  }
+  
   noecho();
   curs_set(FALSE);
   current_selection = 0;
@@ -307,10 +334,16 @@ void open_file(char *current_dir) {
   snprintf(full_path, sizeof(full_path), "%s/%s", current_dir, items[current_selection].name);
   
   char command[MAX_PATH_LEN + 10];
-  snprintf(command, sizeof(command), "xdg-open '%s'", full_path);
+  snprintf(command, sizeof(command), "xdg-open \"%s\"", full_path);
   
+  def_prog_mode();
   endwin();
-  system(command);
+  int ret = system(command);
+  if (ret == -1) {
+    mvprintw(0, 0, "Error executing command");
+    refresh();
+  }
+  reset_prog_mode();
   refresh();
 }
 

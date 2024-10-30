@@ -49,6 +49,7 @@ void delete_file(char *current_dir);
 void open_file(char *current_dir);
 void go_to_parent_dir(char *current_dir);
 void go_to_home_dir(char *current_dir);
+void preview_file(char *current_dir);
 
 int main() {
   initscr();
@@ -261,6 +262,9 @@ void navigate(char *current_dir) {
     endwin();
     exit(0);
     break;
+  case 'p':
+    preview_file(current_dir);
+    break;
   }
 
   draw_interface(current_dir);
@@ -363,4 +367,68 @@ void go_to_home_dir(char *current_dir) {
   current_dir[MAX_PATH_LEN - 1] = '\0';
   current_selection = 0;
   scroll_offset = 0;
+}
+
+void preview_file(char *current_dir) {
+  if (num_items == 0 || items[current_selection].is_dir) {
+    return;
+  }
+
+  char full_path[MAX_PATH_LEN];
+  snprintf(full_path, sizeof(full_path), "%s/%s", current_dir, items[current_selection].name);
+
+  FILE *file = fopen(full_path, "r");
+  if (!file) {
+    mvprintw(0, 0, "Error opening file for preview");
+    refresh();
+    return;
+  }
+
+  int max_y, max_x;
+  getmaxyx(stdscr, max_y, max_x);
+
+  WINDOW *preview_win = newwin(max_y - 4, max_x - 4, 2, 2);
+  wrefresh(preview_win);
+
+  char line[256];
+  int line_num = 0;
+  int ch;
+  int scroll_offset = 0;
+
+  while (1) {
+    werase(preview_win);
+
+    fseek(file, 0, SEEK_SET);
+    for (int i = 0; i < scroll_offset; i++) {
+      fgets(line, sizeof(line), file);
+    }
+
+    line_num = 1;
+    while (fgets(line, sizeof(line), file) && line_num < max_y - 5) {
+      if (strlen(line) > max_x - 10) {
+        line[max_x - 10] = '\0';
+      }
+      mvwprintw(preview_win, line_num, 1, "%4d  %s", line_num + scroll_offset, line);
+      line_num++;
+    }
+
+    box(preview_win, 0, 0);
+    wrefresh(preview_win);
+
+    ch = wgetch(preview_win);
+    if (ch == 'p' || ch == 27) {
+      break;
+    } else if (ch == KEY_UP || ch == 'k') {
+      if (scroll_offset > 0) {
+        scroll_offset--;
+      }
+    } else if (ch == KEY_DOWN || ch == 'j') {
+      scroll_offset++;
+    }
+  }
+
+  fclose(file);
+  delwin(preview_win);
+  clear();
+  refresh();
 }

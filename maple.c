@@ -20,6 +20,7 @@
 #include <pwd.h>
 #include <time.h>
 #include <errno.h>
+#include <strings.h>
 
 #define MAX_ITEMS 1024
 #define MAX_PATH_LEN 4096
@@ -38,6 +39,50 @@ int current_selection = 0;
 int show_hidden = 0;
 char search_term[MAX_SEARCH_LEN] = "";
 int scroll_offset = 0;
+
+typedef enum {
+    SORT_NAME,
+    SORT_SIZE,
+    SORT_TIME
+} SortType;
+
+SortType current_sort = SORT_NAME;
+
+int compare_name(const void *a, const void *b) {
+    FileItem *fa = (FileItem *)a;
+    FileItem *fb = (FileItem *)b;
+    return strcasecmp(fa->name, fb->name);
+}
+
+int compare_size(const void *a, const void *b) {
+    FileItem *fa = (FileItem *)a;
+    FileItem *fb = (FileItem *)b;
+    if (fa->size < fb->size) return 1;
+    if (fa->size > fb->size) return -1;
+    return 0;
+}
+
+int compare_time(const void *a, const void *b) {
+    FileItem *fa = (FileItem *)a;
+    FileItem *fb = (FileItem *)b;
+    if (fa->mtime < fb->mtime) return 1;
+    if (fa->mtime > fb->mtime) return -1;
+    return 0;
+}
+
+void sort_items() {
+    switch (current_sort) {
+        case SORT_NAME:
+            qsort(items, num_items, sizeof(FileItem), compare_name);
+            break;
+        case SORT_SIZE:
+            qsort(items, num_items, sizeof(FileItem), compare_size);
+            break;
+        case SORT_TIME:
+            qsort(items, num_items, sizeof(FileItem), compare_time);
+            break;
+    }
+}
 
 void draw_interface(char *current_dir);
 void list_files(char *current_dir);
@@ -132,6 +177,8 @@ void list_files(char *current_dir) {
   }
 
   closedir(dp);
+
+  sort_items();
 }
 
 void draw_interface(char *current_dir) {
@@ -142,6 +189,20 @@ void draw_interface(char *current_dir) {
 
   mvprintw(0, 0, "%s", current_dir);
   mvprintw(1, 0, "search: %s", search_term);
+
+  const char *sort_indicator;
+  switch (current_sort) {
+    case SORT_NAME:
+      sort_indicator = "Name";
+      break;
+    case SORT_SIZE:
+      sort_indicator = "Size";
+      break;
+    case SORT_TIME:
+      sort_indicator = "Time";
+      break;
+  }
+  mvprintw(1, max_x - 10, "[%s]", sort_indicator);
 
   int start_y = 3;
   int end_y = max_y - 2;
@@ -264,6 +325,10 @@ void navigate(char *current_dir) {
     break;
   case 'p':
     preview_file(current_dir);
+    break;
+  case 's':
+    current_sort = (current_sort + 1) % 3;
+    list_files(current_dir);
     break;
   }
 
